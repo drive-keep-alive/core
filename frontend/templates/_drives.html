@@ -1,0 +1,50 @@
+<table>
+  <thead>
+    <tr>
+      <th>Device</th>
+      <th>Model</th>
+      <th>Mount</th>
+      <th>Temp</th>
+      <th>Reallocated</th>
+      <th>Pending</th>
+      <th>Uncorrectable</th>
+      <th>Used</th>
+      <th>Spare</th>
+      <th>Media err</th>
+      <th>Unsafe shut</th>
+      <th>Power-on h</th>
+      <th>Health</th>
+      <th>Self-test</th>
+      <th>Badblocks</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for d in drives %}
+    <tr>
+      <td class="mono">{{ d.device }}</td>
+      <td>{{ d.model or "—" }}</td>
+      <td>{{ d.mount_point or "—" }}</td>
+      <td class="{{ d.temp_class }}">{{ "%.0f"|format(d.temperature) if d.temperature is not none else "—" }} °C</td>
+      <td class="{{ 'bad' if d.reallocated else 'ok' }}">{{ d.reallocated or 0 }}</td>
+      <td class="{{ 'warn' if d.pending else 'ok' }}">{{ d.pending or 0 }}</td>
+      <td class="{{ 'bad' if d.uncorrectable else 'ok' }}">{{ d.uncorrectable or 0 }}</td>
+      <td>{{ d.percentage_used if d.percentage_used is not none else "—" }}</td>
+      <td>{{ d.available_spare if d.available_spare is not none else "—" }}</td>
+      <td class="{{ 'bad' if d.media_errors else 'ok' }}">{{ d.media_errors or 0 }}</td>
+      <td class="{{ 'warn' if d.unsafe_shutdowns else 'ok' }}">{{ d.unsafe_shutdowns or 0 }}</td>
+      <td>{{ d.power_on_hours or "—" }}</td>
+      <td class="{{ d.health }}">{{ d.health }}</td>
+      <td>
+        {% if d.test %}
+          {{ d.test }} <span class="{{ 'warn' if d.test_status == 'in_progress' else 'ok' }}">{{ d.test_status }}</span>
+        {% else %}
+          <span class="ok">idle</span>
+        {% endif %}
+      </td>
+      <td class="{{ 'warn' if d.scan_status == 'running' else 'ok' }}">{{ d.scan_status }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="15">no drives detected</td></tr>
+  {% endfor %}
+  </tbody>
+</table>

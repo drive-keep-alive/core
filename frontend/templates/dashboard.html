@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Drives</h2>
+    <button id="test-all"
+            hx-post="/dashboard/test-all"
+            hx-target="#drives"
+            hx-swap="innerHTML"
+            hx-indicator="#test-all"
+            hx-disabled-elt="#test-all">
+      Test all
+    </button>
+  </div>
+  <div id="drives"
+       hx-get="/dashboard/drives"
+       hx-trigger="load delay:1s, every {{ refresh_seconds }}s"
+       hx-target="#drives"
+       hx-swap="innerHTML"
+       hx-indicator="#drives">
+    {% include "_drives.html" %}
+  </div>
+</section>
+{% endblock %}

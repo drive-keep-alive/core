@@ -1,0 +1,32 @@
+# drive_keep_alive configuration.
+# Edit freely; changes take effect on restart. A future web dashboard will let you change these without touching the file.
+
+[scheduler]
+# how often each background job runs
+keep_alive_minutes = 4   # read a file on each mounted drive to keep it spun up
+smart_poll_minutes = 15  # store a fresh SMART attribute snapshot per drive
+short_test_days = 7      # smartctl short self-test cadence
+long_test_days = 30      # smartctl long self-test cadence
+badblocks_days = 30      # read-only badblocks scan cadence
+
+[health]
+# drive classification thresholds; warn first, then critical
+temp_warn_c = 50          # warn when temp is at or above this (Celsius)
+temp_critical_c = 60      # critical when temp is at or above this
+reallocated_warn = 1      # any reallocated sector count above 0 is worth a look
+pending_warn = 1          # sectors waiting to be reallocated
+uncorrectable_warn = 1    # confirmed bad sectors
+spin_retry_warn = 1       # failed spin-up attempts
+reallocated_critical = 10 # heavy reallocation means failing media
+uncorrectable_critical = 5
+# NVMe and newer SSD wear indicators
+percentage_used_warn = 80   # NVMe "percentage used"; drive is wearing out
+percentage_used_critical = 100
+media_errors_warn = 1       # media and data integrity errors (NVMe)
+media_errors_critical = 5
+unsafe_shutdowns_warn = 10  # abrupt power losses (NVMe)
+available_spare_warn = 10   # spare blocks remaining, percent; lower is worse
+available_spare_critical = 1
+
+[dashboard]
+refresh_seconds = 30 # how often the dashboard polls for drive status
