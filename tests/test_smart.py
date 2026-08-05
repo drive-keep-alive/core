@@ -1,13 +1,13 @@
 """SMART parsing: canonical attrs, ATA/NVMe paths, selftest log handling."""
 
 import subprocess
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlmodel import select
 
 import poll_handling
 from database_handling import session_scope
-from models import Drive, SelfTestResult, SmartAttribute
+from models import Drive, SelfTestResult, SmartAttribute, utcnow
 
 
 class FakeAttr:
@@ -302,12 +302,13 @@ def test_latest_attrs_by_name_keeps_newest(db):
         s.add(d)
         s.flush()
         did = d.id
-        t1 = datetime.utcnow() - timedelta(hours=2)
-        t2 = datetime.utcnow()
+        t1 = utcnow() - timedelta(hours=2)
+        t2 = utcnow()
         s.add(SmartAttribute(drive_id=did, name="Temperature_Celsius", raw=40, timestamp=t1))
         s.add(SmartAttribute(drive_id=did, name="temperature", raw=42, timestamp=t2))
         s.add(SmartAttribute(drive_id=did, name="Reallocated_Sector_Ct", raw=3, timestamp=t2))
-    latest = poll_handling._latest_attrs_by_name(did)
+    with session_scope() as s:
+        latest = poll_handling._latest_attrs_by_name(did, s)
     assert latest["Temperature_Celsius"] == 42  # newest wins, alias collapsed
     assert latest["Reallocated_Sector_Ct"] == 3
 
@@ -320,14 +321,15 @@ def test_latest_attrs_by_name_large_history(db):
         s.add(d)
         s.flush()
         did = d.id
-        base = datetime.utcnow() - timedelta(days=30)
+        base = utcnow() - timedelta(days=30)
         for i in range(1000):
             ts = base + timedelta(minutes=i)
             s.add(SmartAttribute(drive_id=did, name="Temperature_Celsius",
                                  raw=30 + i % 40, timestamp=ts))
             s.add(SmartAttribute(drive_id=did, name="Reallocated_Sector_Ct",
                                  raw=i % 5, timestamp=ts))
-    latest = poll_handling._latest_attrs_by_name(did)
+    with session_scope() as s:
+        latest = poll_handling._latest_attrs_by_name(did, s)
     assert latest["Temperature_Celsius"] == 69   # 30 + 999 % 40
     assert latest["Reallocated_Sector_Ct"] == 4  # 999 % 5
 
@@ -340,8 +342,8 @@ def test_prune_smart_attributes_drops_old_rows(db, config_dict):
         s.add(d)
         s.flush()
         did = d.id
-        old = datetime.utcnow() - timedelta(days=3)
-        fresh = datetime.utcnow() - timedelta(hours=6)
+        old = utcnow() - timedelta(days=3)
+        fresh = utcnow() - timedelta(hours=6)
         s.add(SmartAttribute(drive_id=did, name="Temperature_Celsius", raw=40, timestamp=old))
         s.add(SmartAttribute(drive_id=did, name="Temperature_Celsius", raw=41, timestamp=fresh))
     asyncio.run(poll_handling.prune_smart_attributes())

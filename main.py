@@ -38,13 +38,12 @@ def schedule_jobs() -> None:
              minutes=cfg["keep_alive_minutes"], job_id="keep-alive")
     _add_job(poll_handling.poll_smart, "interval",
              minutes=cfg["smart_poll_minutes"], job_id="smart-poll")
-    # weekly short test
+    # short and long self-tests; cadence comes from config
     _add_job(poll_handling.run_short_tests, "interval",
              days=cfg["short_test_days"], job_id="short-self-test")
-    # monthly long test
     _add_job(poll_handling.run_long_tests, "interval",
              days=cfg["long_test_days"], job_id="long-self-test")
-    # monthly badblocks scan; stagger a day after the long test so the two
+    # heavy badblocks scan; stagger a day after the long test so the two
     # heavy scans dont compete on the same cadence
     _add_job(poll_handling.run_badblock_scans, "interval",
              days=cfg["badblocks_days"], start_date=now + timedelta(days=1),
@@ -103,8 +102,3 @@ async def dashboard_test_all(request: Request):
     return templates.TemplateResponse(
         request, "_drives.html", {"request": request, "drives": drives}
     )
-
-
-@app.get("/test")
-def test(db):
-    return {"status": "ok"}

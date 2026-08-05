@@ -21,9 +21,3 @@ def session_scope():
         except Exception:
             session.rollback()
             raise
-
-
-def get_session():
-    """FastAPI dependency; yields a session for route handlers."""
-    with session_scope() as session:
-        yield session

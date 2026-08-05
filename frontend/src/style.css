@@ -28,12 +28,46 @@
   font-display: swap;
 }
 
+:root {
+  color-scheme: light;
+  --bg: #f7f7f7;
+  --surface: #fff;
+  --border: #e5e5e5;
+  --border-strong: #d0d0d0;
+  --text: #333;
+  --muted: #999;
+  --th: #888;
+  --row-border: #ececec;
+  --btn-bg: #f0f0f0;
+  --btn-hover: #e5e5e5;
+  --ok: #2e7d32;
+  --warn: #b26a00;
+  --bad: #c62828;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #17181c;
+  --surface: #202228;
+  --border: #2e3038;
+  --border-strong: #3a3d45;
+  --text: #e0e2e8;
+  --muted: #8a8d96;
+  --th: #9a9da6;
+  --row-border: #2a2c32;
+  --btn-bg: #2a2c33;
+  --btn-hover: #34363e;
+  --ok: #81c784;
+  --warn: #ffb74d;
+  --bad: #ef5350;
+}
+
 html {
   font-family: "Source Sans Pro", ui-sans-serif, system-ui, sans-serif;
   font-size: 14px;
   margin: 0;
-  background: #f7f7f7;
-  color: #333;
+  background: var(--bg);
+  color: var(--text);
 }
 
 body {
@@ -41,8 +75,12 @@ body {
 }
 
 header {
-  background: #fff;
-  border-bottom: 1px solid #e5e5e5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
   padding: 0.75rem 1.25rem;
 }
 
@@ -65,13 +103,13 @@ h2 {
 }
 
 .muted {
-  color: #999;
+  color: var(--muted);
   font-size: 0.85rem;
 }
 
 .panel {
-  background: #fff;
-  border: 1px solid #e5e5e5;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1rem;
 }
@@ -89,21 +127,26 @@ h2 {
 
 button {
   font: inherit;
-  color: #333;
-  background: #f0f0f0;
-  border: 1px solid #d0d0d0;
+  color: var(--text);
+  background: var(--btn-bg);
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
   padding: 0.3rem 0.8rem;
   cursor: pointer;
 }
 
 button:hover {
-  background: #e5e5e5;
+  background: var(--btn-hover);
 }
 
 button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.theme-toggle {
+  font-size: 0.85rem;
+  padding: 0.25rem 0.6rem;
 }
 
 table {
@@ -114,11 +157,11 @@ table {
 th, td {
   text-align: left;
   padding: 0.45rem 0.6rem;
-  border-bottom: 1px solid #ececec;
+  border-bottom: 1px solid var(--row-border);
 }
 
 th {
-  color: #888;
+  color: var(--th);
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -129,11 +172,11 @@ th {
 }
 
 .ok {
-  color: #2e7d32;
+  color: var(--ok);
 }
 .warn {
-  color: #b26a00;
+  color: var(--warn);
 }
 .bad {
-  color: #c62828;
+  color: var(--bad);
 }

@@ -1,8 +1,10 @@
 """Poll logic for drive health jobs.
 
-Every public entrypoint is async so APScheduler keeps the event loop free;
-blocking calls (pyudev, pySMART, subprocess) run via asyncio.to_thread.
-"""
+Scheduled entrypoints are async; heavy blocking work (pySMART, subprocess,
+badblocks, DB writes) runs via asyncio.to_thread. discover_drives is cached
+for 60s, so the pyudev walk + DB commit happens at most once a minute even
+when several jobs call it in the same tick."""
+
 
 from __future__ import annotations
 
@@ -13,18 +15,18 @@ import os
 import re
 import subprocess
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 import psutil
 import pyudev
 from pySMART import Device # stupid fucking naming for this package btw
 from sqlalchemy import delete, func
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from config_handling import get as get_config
 from database_handling import session_scope
-from models import BadBlockScan, Drive, SelfTestResult, SmartAttribute
+from models import BadBlockScan, Drive, SelfTestResult, SmartAttribute, utcnow
 
 log = logging.getLogger("uvicorn.error")
 
@@ -46,16 +48,6 @@ def _run_cmd(*args: str) -> subprocess.CompletedProcess | None:
     except FileNotFoundError:
         log.warning("command not found: %s", args[0])
         return None
-
-# attrs that signal trouble when they rise; stored per poll for trending
-WATCHED_ATTRS = {
-    "Reallocated_Sector_Ct",
-    "Current_Pending_Sector",
-    "Offline_Uncorrectable",
-    "Power_On_Hours",
-    "Temperature_Celsius",
-    "Spin_Retry_Count",
-}
 
 # canonical key -> aliases used by different drive families and ages;
 # ATA, SATA SSD, and NVMe report the same thing under different names
@@ -244,7 +236,7 @@ def _poll_smart_node(drive: dict) -> None:
     if not rows:
         log.warning("no SMART data for %s", node)
         return
-    ts = datetime.utcnow()
+    ts = utcnow()
     with session_scope() as session:
         for attr in rows:
             attr.drive_id = drive["id"]
@@ -283,7 +275,8 @@ async def keep_alive_read() -> None:
 def _selftest_json(node: str) -> dict | None:
     """Parse smartctl -l selftest -j output. Exit codes are unreliable here:
     bit 7 (128) is set whenever the log contains error records, which is
-    exactly the case we want to see. Only a missing binary yields None."""
+    exactly the case we want to see. None if the binary is missing or the
+    output is not valid JSON."""
     proc = _run_cmd(SMARTCTL, "-l", "selftest", "-j", node)
     if proc is None:
         return None
@@ -328,13 +321,13 @@ def _sync_selftest_status(drive: dict) -> None:
             return
         row.status = _map_selftest_status(latest.get("status", ""))
         if row.status != "IN_PROGRESS":
-            row.finished_at = datetime.utcnow()
+            row.finished_at = utcnow()
         session.add(row)
         session.commit()
 
 
 def _has_active_test(drive_id: int, test_type: str) -> bool:
-    """True if a self-test for this drive is queued, in progress, or running."""
+    """True if a self-test for this drive is queued or in progress."""
     with session_scope() as session:
         stmt = (
             select(SelfTestResult)
@@ -371,12 +364,12 @@ async def _run_tests(test_type: str) -> None:
 
 
 async def run_short_tests() -> None:
-    """Weekly cron job; run the SMART short self-test on every drive."""
+    """Interval job; run the SMART short self-test on every drive."""
     await _run_tests("short")
 
 
 async def run_long_tests() -> None:
-    """Monthly cron job; run the SMART long self-test on every drive."""
+    """Interval job; run the SMART long self-test on every drive."""
     await _run_tests("long")
 
 
@@ -430,13 +423,12 @@ def _run_badblocks(drive: dict) -> None:
             ).first()
             is not None
         )
-    if active:
-        log.info("skipping badblocks on %s: a scan is already running", node)
-        return
-    with session_scope() as session:
+        if active:
+            log.info("skipping badblocks on %s: a scan is already running", node)
+            return
         scan = BadBlockScan(drive_id=drive["id"], status="RUNNING")
         session.add(scan)
-        session.commit()
+        session.commit()  # persist RUNNING before the long scan so it holds no lock
         scan_id = scan.id
 
     proc = _badblocks_proc(node)
@@ -455,7 +447,7 @@ def _run_badblocks(drive: dict) -> None:
     with session_scope() as session:
         scan = session.get(BadBlockScan, scan_id)
         if scan is not None:
-            scan.finished_at = datetime.utcnow()
+            scan.finished_at = utcnow()
             scan.status = status
             scan.bad_blocks = bad
             scan.error = error
@@ -464,18 +456,23 @@ def _run_badblocks(drive: dict) -> None:
 
 
 async def run_badblock_scans() -> None:
-    """Monthly cron job; read-only badblocks scan of every drive."""
+    """Interval job; read-only badblocks scan of every drive."""
     for drive in discover_drives():
         await asyncio.to_thread(_run_badblocks, drive)
 
 
-async def prune_smart_attributes() -> None:
-    """Daily job; drop SMART snapshots older than the retention window so
-    the snapshot table stays bounded on a low-RAM device."""
+def _prune_old_rows() -> None:
+    """Drop SMART snapshots older than the retention window so the snapshot
+    table stays bounded on a low-RAM device. Sync; call from a worker."""
     days = get_config()["database"]["retention_days"]
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = utcnow() - timedelta(days=days)
     with session_scope() as session:
         session.execute(delete(SmartAttribute).where(SmartAttribute.timestamp < cutoff))
+
+
+async def prune_smart_attributes() -> None:
+    """Daily job; prune old SMART snapshots off the event loop."""
+    await asyncio.to_thread(_prune_old_rows)
 
 
 def _is_nvme(node: str) -> bool:
@@ -515,7 +512,7 @@ def _apply_power(drive: dict) -> None:
         _apply_hdparm(node)
 
 
-def _latest_attrs_by_name(drive_id: int) -> dict[str, int | None]:
+def _latest_attrs_by_name(drive_id: int, session: Session) -> dict[str, int | None]:
     """Most recent raw value per SMART attribute name for one drive.
 
     Fetches only the newest row per name (max id subquery) instead of the
@@ -526,16 +523,15 @@ def _latest_attrs_by_name(drive_id: int) -> dict[str, int | None]:
         .where(SmartAttribute.drive_id == drive_id)
         .group_by(SmartAttribute.name)
     )
-    with session_scope() as session:
-        rows = session.exec(
-            select(SmartAttribute)
-            .where(SmartAttribute.id.in_(newest_ids))
-            .order_by(SmartAttribute.id.desc())
-        ).all()
-        for r in rows:
-            key = _canonical_attr(r.name)
-            if key not in latest:
-                latest[key] = r.raw
+    rows = session.exec(
+        select(SmartAttribute)
+        .where(SmartAttribute.id.in_(newest_ids))
+        .order_by(SmartAttribute.id.desc())
+    ).all()
+    for r in rows:
+        key = _canonical_attr(r.name)
+        if key not in latest:
+            latest[key] = r.raw
     return latest
 
 
@@ -590,7 +586,7 @@ def get_dashboard_status() -> list[dict]:
     with session_scope() as session:
         drives = session.exec(select(Drive)).all()
         for d in drives:
-            attrs = _latest_attrs_by_name(d.id)
+            attrs = _latest_attrs_by_name(d.id, session)
             temp = attrs.get("Temperature_Celsius")
             if temp is None:
                 temp_class = "ok"
@@ -635,7 +631,6 @@ def get_dashboard_status() -> list[dict]:
                 "test": active_test.test_type if active_test else None,
                 "test_status": active_test.status.lower() if active_test else "idle",
                 "scan_status": "running" if active_scan else "idle",
-                "last_seen": d.first_seen,
             })
     return out
 
@@ -646,11 +641,20 @@ async def apply_power_settings() -> None:
         await asyncio.to_thread(_apply_power, drive)
 
 
+# guard against overlapping manual test-all runs from rapid button clicks
+_RUN_ALL_TESTS_LOCK = asyncio.Lock()
+
+
 async def run_all_tests() -> None:
     """Instant diagnostic run per drive: SMART/temp poll, short self-test,
-    badblocks. Skips a stage if that drive already has it in flight."""
-    drives = await asyncio.to_thread(discover_drives)
-    for drive in drives:
-        await asyncio.to_thread(_poll_smart_node, drive)
-        await asyncio.to_thread(_trigger_test, drive, "short")
-        await asyncio.to_thread(_run_badblocks, drive)
+    badblocks. Skips a stage if that drive already has it in flight, and
+    refuses to start while a manual run is already in progress."""
+    if _RUN_ALL_TESTS_LOCK.locked():
+        log.info("skipping test-all: a manual run is already in progress")
+        return
+    async with _RUN_ALL_TESTS_LOCK:
+        drives = await asyncio.to_thread(discover_drives)
+        for drive in drives:
+            await asyncio.to_thread(_poll_smart_node, drive)
+            await asyncio.to_thread(_trigger_test, drive, "short")
+            await asyncio.to_thread(_run_badblocks, drive)

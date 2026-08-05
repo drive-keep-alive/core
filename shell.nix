@@ -7,6 +7,7 @@ pkgs.mkShell {
     hdparm
     e2fsprogs
     nvme-cli
+    e2fsprogs
     (python313.withPackages (
       p: with p; [
         ipython

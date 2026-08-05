@@ -26,7 +26,10 @@ def db(monkeypatch):
     )
     SQLModel.metadata.create_all(engine)
     monkeypatch.setattr(database_handling, "engine", engine)
-    return engine
+    yield engine
+    # dispose so the StaticPool connection closes here instead of at GC,
+    # where sqlite finalization raises an unraisable exception
+    engine.dispose()
 
 
 @pytest.fixture

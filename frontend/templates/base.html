@@ -4,15 +4,39 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}drive_keep_alive{% endblock %}</title>
+  <script>
+    // set the theme before first paint to avoid a flash; no stored value
+    // falls back to the OS preference
+    (function () {
+      var t = localStorage.getItem("theme");
+      if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", t);
+    })();
+  </script>
   <script src="/static/htmx.min.js" defer></script>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header>
     <h1>drive_keep_alive</h1>
+    <button id="theme-toggle" type="button" class="theme-toggle" aria-label="Toggle light/dark theme"></button>
   </header>
   <main>
     {% block content %}{% endblock %}
   </main>
+  <script>
+    (function () {
+      var root = document.documentElement;
+      var btn = document.getElementById("theme-toggle");
+      var label = function (t) { return t === "dark" ? "Light mode" : "Dark mode"; };
+      btn.textContent = label(root.getAttribute("data-theme"));
+      btn.addEventListener("click", function () {
+        var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+        root.setAttribute("data-theme", next);
+        btn.textContent = label(next);
+        localStorage.setItem("theme", next);
+      });
+    })();
+  </script>
 </body>
 </html>
