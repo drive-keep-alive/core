@@ -310,3 +310,42 @@ def test_latest_attrs_by_name_keeps_newest(db):
     latest = poll_handling._latest_attrs_by_name(did)
     assert latest["Temperature_Celsius"] == 42  # newest wins, alias collapsed
     assert latest["Reallocated_Sector_Ct"] == 3
+
+
+def test_latest_attrs_by_name_large_history(db):
+    # 2000 snapshots; the max(id) subquery must still return only the newest
+    # row per attribute without loading the whole history
+    with session_scope() as s:
+        d = Drive(device="/dev/sda")
+        s.add(d)
+        s.flush()
+        did = d.id
+        base = datetime.utcnow() - timedelta(days=30)
+        for i in range(1000):
+            ts = base + timedelta(minutes=i)
+            s.add(SmartAttribute(drive_id=did, name="Temperature_Celsius",
+                                 raw=30 + i % 40, timestamp=ts))
+            s.add(SmartAttribute(drive_id=did, name="Reallocated_Sector_Ct",
+                                 raw=i % 5, timestamp=ts))
+    latest = poll_handling._latest_attrs_by_name(did)
+    assert latest["Temperature_Celsius"] == 69   # 30 + 999 % 40
+    assert latest["Reallocated_Sector_Ct"] == 4  # 999 % 5
+
+
+def test_prune_smart_attributes_drops_old_rows(db, config_dict):
+    import asyncio
+    config_dict["database"]["retention_days"] = 1
+    with session_scope() as s:
+        d = Drive(device="/dev/sda")
+        s.add(d)
+        s.flush()
+        did = d.id
+        old = datetime.utcnow() - timedelta(days=3)
+        fresh = datetime.utcnow() - timedelta(hours=6)
+        s.add(SmartAttribute(drive_id=did, name="Temperature_Celsius", raw=40, timestamp=old))
+        s.add(SmartAttribute(drive_id=did, name="Temperature_Celsius", raw=41, timestamp=fresh))
+    asyncio.run(poll_handling.prune_smart_attributes())
+    with session_scope() as s:
+        rows = s.exec(select(SmartAttribute)).all()
+        assert len(rows) == 1
+        assert rows[0].raw == 41

@@ -12,12 +12,14 @@ import logging
 import os
 import re
 import subprocess
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import psutil
 import pyudev
 from pySMART import Device # stupid fucking naming for this package btw
+from sqlalchemy import delete, func
 from sqlmodel import select
 
 from config_handling import get as get_config
@@ -30,6 +32,11 @@ SMARTCTL = "smartctl"
 BADBLOCKS = "badblocks"
 HDPARM = "hdparm"
 NVME = "nvme"
+
+# discovery is re-run at most once per TTL; a pyudev walk + DB commit on every
+# job tick is wasted work when nothing changed
+_DISCOVER_CACHE_TTL = 60  # seconds
+_discover_cache: tuple[float, list[dict]] | None = None
 
 
 def _run_cmd(*args: str) -> subprocess.CompletedProcess | None:
@@ -101,6 +108,18 @@ def _mount_point(node: str) -> str | None:
 
 
 def discover_drives() -> list[dict]:
+    """Cached facade over _discover_drives; keeps the pyudev walk + DB
+    commit at most once per _DISCOVER_CACHE_TTL seconds."""
+    global _discover_cache
+    now = time.monotonic()
+    if _discover_cache is not None and now - _discover_cache[0] < _DISCOVER_CACHE_TTL:
+        return _discover_cache[1]
+    drives = _discover_drives()
+    _discover_cache = (now, drives)
+    return drives
+
+
+def _discover_drives() -> list[dict]:
     """Upsert block devices pyudev reports as disks; return plain snapshots.
 
     Plain dicts are returned so callers never touch detached ORM rows;
@@ -364,6 +383,38 @@ async def run_long_tests() -> None:
 _BADBLOCKS_RE = re.compile(r"(\d+)\s+bad blocks")
 
 
+def _badblocks_proc(node: str) -> subprocess.Popen | None:
+    """Start a badblocks scan; None if the binary is missing.
+
+    stderr is merged into stdout so the summary line is found regardless of
+    which stream the version writes it to."""
+    try:
+        return subprocess.Popen(
+            [BADBLOCKS, "-s", "-v", node],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+    except FileNotFoundError:
+        log.warning("command not found: %s", BADBLOCKS)
+        return None
+
+
+def _drain_tail(proc: subprocess.Popen, max_chars: int = 8192) -> str:
+    """Drain badblocks output keeping only the tail.
+
+    A full -s -v scan on a large disk can emit tens of MB of progress text;
+    we only need the summary at the end, so drop everything but the tail."""
+    tail = bytearray()
+    while True:
+        chunk = proc.stdout.read(65536)
+        if not chunk:
+            break
+        tail.extend(chunk)
+        if len(tail) > max_chars:
+            del tail[: len(tail) - max_chars]
+    return tail.decode("utf-8", "replace")
+
+
 def _run_badblocks(drive: dict) -> None:
     """Read-only badblocks scan for one drive; record outcome in the DB."""
     node = drive["device"]
@@ -388,11 +439,12 @@ def _run_badblocks(drive: dict) -> None:
         session.commit()
         scan_id = scan.id
 
-    proc = _run_cmd(BADBLOCKS, "-s", "-v", node)
+    proc = _badblocks_proc(node)
     if proc is None:
         bad, status, error = None, "FAILED", "badblocks not found"
     else:
-        output = f"{proc.stdout}\n{proc.stderr}"
+        output = _drain_tail(proc)
+        proc.wait()
         match = _BADBLOCKS_RE.search(output)
         bad = int(match.group(1)) if match else None
         if bad is not None:
@@ -415,6 +467,15 @@ async def run_badblock_scans() -> None:
     """Monthly cron job; read-only badblocks scan of every drive."""
     for drive in discover_drives():
         await asyncio.to_thread(_run_badblocks, drive)
+
+
+async def prune_smart_attributes() -> None:
+    """Daily job; drop SMART snapshots older than the retention window so
+    the snapshot table stays bounded on a low-RAM device."""
+    days = get_config()["database"]["retention_days"]
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    with session_scope() as session:
+        session.execute(delete(SmartAttribute).where(SmartAttribute.timestamp < cutoff))
 
 
 def _is_nvme(node: str) -> bool:
@@ -455,13 +516,21 @@ def _apply_power(drive: dict) -> None:
 
 
 def _latest_attrs_by_name(drive_id: int) -> dict[str, int | None]:
-    """Most recent raw value per SMART attribute name for one drive."""
+    """Most recent raw value per SMART attribute name for one drive.
+
+    Fetches only the newest row per name (max id subquery) instead of the
+    full snapshot history; the dashboard calls this every refresh."""
     latest: dict[str, int | None] = {}
+    newest_ids = (
+        select(func.max(SmartAttribute.id))
+        .where(SmartAttribute.drive_id == drive_id)
+        .group_by(SmartAttribute.name)
+    )
     with session_scope() as session:
         rows = session.exec(
             select(SmartAttribute)
-            .where(SmartAttribute.drive_id == drive_id)
-            .order_by(SmartAttribute.timestamp.desc())
+            .where(SmartAttribute.id.in_(newest_ids))
+            .order_by(SmartAttribute.id.desc())
         ).all()
         for r in rows:
             key = _canonical_attr(r.name)

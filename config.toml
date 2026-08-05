@@ -30,3 +30,6 @@ available_spare_critical = 1
 
 [dashboard]
 refresh_seconds = 30 # how often the dashboard polls for drive status
+
+[database]
+retention_days = 7 # keep SMART snapshots this long; older rows pruned daily

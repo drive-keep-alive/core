@@ -43,6 +43,9 @@ DEFAULTS: dict = {
     "dashboard": {
         "refresh_seconds": 30,
     },
+    "database": {
+        "retention_days": 7,  # keep SMART snapshots this long; pruned daily
+    },
 }
 
 _config: dict | None = None

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse,RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -49,6 +49,9 @@ def schedule_jobs() -> None:
     _add_job(poll_handling.run_badblock_scans, "interval",
              days=cfg["badblocks_days"], start_date=now + timedelta(days=1),
              job_id="badblocks")
+    # daily; keep the smart snapshot table bounded
+    _add_job(poll_handling.prune_smart_attributes, "interval",
+             days=1, job_id="prune-smart")
 
 
 @asynccontextmanager
@@ -68,6 +71,9 @@ app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="./frontend/src/"), name="static")
 templates = Jinja2Templates(directory="./frontend/templates")
 
+@app.get("/", response_class=HTMLResponse)
+def index(request:Request):
+    return RedirectResponse("/dashboard",status_code=303)
 
 # read-only dashboard views (polled by the UI)
 @app.get("/dashboard", response_class=HTMLResponse)

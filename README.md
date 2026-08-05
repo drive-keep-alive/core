@@ -6,7 +6,7 @@ a low-power appliance that keeps archival hard drives and ssds alive: periodic r
 
 this is the software foundation. the hardware enclosure, pcb, ups, and packaging will be linked in seperate repos when built. the code is functional and covered by tests, but it is not polished or packaged for end users:
 
-- **implemented and working** today: smart polling (ata + nvme), keep-alive reads, weekly short / monthly long smart self-tests, monthly read-only badblocks scans, spin-down prevention via hdparm, nvme power state handling, drive discovery, a read-only web dashboard, and a toml config file.
+- **implemented**: smart polling (ata + nvme), keep-alive reads, weekly short / monthly long smart self-tests, monthly read-only badblocks scans, spin-down prevention via hdparm, nvme power state handling, drive discovery, a read-only web dashboard, and a toml config file.
 - **planned, not built**: email/push alerts, checksum/bit-rot scrubbing, estimated remaining life and failure modeling, samba read-only file sharing, ups/battery integration, per-drive config in the web ui, and a full proggramatic api.
 
 everything below describes what exists now, not the complete campaign vision.
@@ -45,9 +45,10 @@ developed in nixos, all dependencies are declared in `shell.nix`:
 
 ```sh
 nix-shell
-uvicorn main:app --host 0.0.0.0 --port 8000
+sudo uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
+needs sudo for nmcli and various other disk operations,in production set_cap features will be needed
 on startup it creates the sqlite db, discovers connected drives, schedules all jobs, and applies power settings. the dashboard is at `/dashboard` (the `/dashboard/drives` fragment is polled by htmx).
 
 ## configuration
@@ -57,6 +58,7 @@ on startup it creates the sqlite db, discovers connected drives, schedules all j
 - `scheduler` - job cadences (minutes/days)
 - `health` - warn/critical thresholds per attribute; ata (temperature, reallocated/pending/uncorrectable sectors, spin retry) and nvme (percentage used, media errors, unsafe shutdowns, available spare)
 - `dashboard` - ui refresh interval
+- `database` - SMART snapshot retention window (older rows are pruned daily)
 
 a missing or broken file falls back to defaults so the application always starts.
 

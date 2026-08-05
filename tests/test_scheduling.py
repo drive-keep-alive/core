@@ -11,12 +11,13 @@ def _jobs(scheduler):
     return {j.id: j for j in scheduler.get_jobs()}
 
 
-def test_schedule_jobs_registers_five(config_dict, monkeypatch):
+def test_schedule_jobs_registers_six(config_dict, monkeypatch):
     scheduler = AsyncIOScheduler()
     monkeypatch.setattr(main_mod, "scheduler", scheduler)
     main_mod.schedule_jobs()
     assert set(_jobs(scheduler)) == {
-        "keep-alive", "smart-poll", "short-self-test", "long-self-test", "badblocks",
+        "keep-alive", "smart-poll", "short-self-test", "long-self-test",
+        "badblocks", "prune-smart",
     }
 
 
@@ -37,6 +38,7 @@ def test_schedule_jobs_intervals_from_config(config_dict, monkeypatch):
     assert jobs["short-self-test"].trigger.interval == timedelta(days=7)
     assert jobs["long-self-test"].trigger.interval == timedelta(days=30)
     assert jobs["badblocks"].trigger.interval == timedelta(days=30)
+    assert jobs["prune-smart"].trigger.interval == timedelta(days=1)
 
 
 def test_schedule_jobs_every_job_guards_overlap(config_dict, monkeypatch):
